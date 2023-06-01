@@ -1,0 +1,25 @@
+{
+  "kind": "collectionType",
+  "collectionName": "league_tables",
+  "info": {
+    "singularName": "league-table",
+    "pluralName": "league-tables",
+    "displayName": "جدول ترتيب الدوري",
+    "description": ""
+  },
+  "options": {
+    "draftAndPublish": false
+  },
+  "pluginOptions": {},
+  "attributes": {
+    "league": {
+      "type": "relation",
+      "relation": "oneToOne",
+      "target": "api::league.league",
+      "inversedBy": "league_table"
+    },
+    "data": {
+      "type": "json"
+    }
+  }
+}

@@ -1,433 +1,196 @@
 "use strict";
-
-const { log } = require("console");
-
-/**
- * league controller
- */
-
 const { createCoreController } = require("@strapi/strapi").factories;
-
-function orederTeams(team1, team2) {
-  if (team1.totalScore === team2.totalScore) {
-    return team2.abnat - team1.abnat;
-  } else {
-    return team2.totalScore - team1.totalScore;
-  }
-}
 
 module.exports = createCoreController("api::league.league", ({ strapi }) => {
   return {
-    async findAllTeamsofLeague(ctx) {
-      let leagueId = strapi.requestContext.get().params.id;
-      if (!leagueId || isNaN(leagueId)) {
-        // Throw Error
-        console.log("Invalid league Id");
-        ctx.throw(404, "League Not Found");
-      }
-      const team1_ids = (await strapi.db.connection.raw(`
-                select DISTINCT( mt1L.team_id )from matches 
-                Join  matches_team_1_links mt1L on mt1L.match_id = matches.id  
-                where matches.id in 
-                (SELECT match_id FROM matches_tournament_links MTourLink WHERE MTourLink.tournament_id in
-                (SELECT tournament_id from tournaments_league_links tm where tm.league_id = ${leagueId}));
-            `))?.rows;
-      const team2_ids = (await strapi.db.connection.raw(`
-                select DISTINCT( mt2L.team_id )from matches 
-                Join  matches_team_2_links mt2L on mt2L.match_id = matches.id  
-                where matches.id in 
-                (SELECT match_id FROM matches_tournament_links MTourLink WHERE MTourLink.tournament_id in
-                (SELECT tournament_id from tournaments_league_links tm where tm.league_id = ${leagueId}));
-            `))?.rows;
-      if (
-        team1_ids &&
-        team1_ids.length > 0 &&
-        team2_ids &&
-        team2_ids.length > 0
-      ) {
-        const teams_ids = [...new Set([...(team1_ids.map(elm => elm.team_id)), ...(team2_ids.map(elm => elm.team_id))])];
-        console.log(teams_ids);
-        try {
-          let teams = await Promise.all(
-            teams_ids.map(async (elm) => {
-              return await strapi.entityService.findOne(
-                "api::team.team",
-                elm,
-                {
-                  fields: ["id", "name"],
-                  populate: {
-                    logo: {
-                      fields: ["formats"],
-                    },
-                  },
-                }
-              );
-            })
-          );
-          return teams.map((team) => {
-            return {
-              ...team,
-              logo: team.logo?.formats.thumbnail.url,
-            };
-          });
-        } catch (err) {
-          console.error(
-            "===========> ERROR IN players In league Controller<==========="
-          );
-          console.error(err);
-        }
-      } else {
-        // Throw Error
-        console.log("error league has no matches");
-        ctx.throw(404, "League has no Matches");
-      }
-    },
     async summary(ctx) {
-      let leagueId = strapi.requestContext.get().params.id;
-      if (!leagueId || isNaN(leagueId)) {
-        console.log("from in valid ID ");
-        ctx.throw(404, "League Not Found");
+      let league = await this.findLeague(ctx)
+      let data = await strapi.db.connection.raw(`
+        select data 
+        from league_tables_league_links ltll 
+        inner join league_tables lt on lt.id = ltll.league_table_id
+        where ltll.league_id = ${league.id};
+      `)
+      if (data.rows.length === 0) {
+        ctx.throw(404, "League or Table Not Found");
+      } else {
+        let res = { ...league, table: JSON.parse(data.rows[0].data) }
+        return res
       }
-      try {
-        let tableObj = {};
 
-        const league = await strapi.entityService.findOne("api::league.league", leagueId, {
-          fields: ["id", "name"],
-          populate: {
-            image: {
-              fields: "formats"
-            }
+    },
+    async findAllStudiosOfLeague(ctx) {
+      let league = await this.findLeague(ctx)
+      let studiosAnalysts = await strapi.db.connection.raw(
+        `
+        select s.id as studio_id , a.name as analyst_name , a.id as analyst_id ,s.name as studio_name , s.start_at , s.url ,t.name as tournament_name
+        from leagues l 
+        inner join tournaments_league_links ttl on ttl.league_id = l.id
+        inner join tournaments t on ttl.tournament_id = t.id
+        inner join tournaments_studio_links tsl on tsl.tournament_id = t.id
+        inner join studios s on  s.id = tsl.studio_id
+        inner join analysts_studio_links asl on asl.studio_id = s.id
+        inner join analysts a on a.id = asl.analyst_id
+        where l.id = ${league.id}
+        order by s.start_at;
+      `)
+      let studiosObj = {}
+      studiosAnalysts.rows.forEach((analyst) => {
+        if (!Object.hasOwnProperty.call(studiosObj, analyst.studio_id)) {
+          studiosObj[analyst.studio_id] = {
+            name: analyst.studio_name,
+            id: analyst.studio_id,
+            url: analyst.url,
+            start_at: analyst.start_at,
+            tournament_name: analyst.tournament_name,
+            analysts: []
           }
+        }
+        studiosObj[analyst.studio_id].analysts.push({
+          id: analyst.studio_id,
+          name: analyst.analyst_name,
         })
-
-        let leagueTeams = await this.findAllTeamsofLeague(ctx);
-        leagueTeams.forEach((team) => {
-          tableObj[team.id] = {
-            id: team.id,
-            name: team.name,
-            abnat: 0,
-            play: 0,
-            lost: 0,
-            win: 0,
-            totalScore: 0,
-            totalScoreForAbnat: 0,
-            totalNumberOfRounds: 0
-          };
-        });
-
-        let matches = await this.findAllMatchesOfLeague(ctx);
-
-        for (let matchIdx = 0; matchIdx < matches.length; matchIdx++) {
-          const match = matches[matchIdx];
-          if (match.state !== "انتهت") continue;
-          for (let teamIdx = 1; teamIdx <= 2; teamIdx++) {
-            const team = match[`team_${teamIdx}`];
-            tableObj[team.id].totalScoreForAbnat += team.totalScoreForAbnat;
-            tableObj[team.id].totalNumberOfRounds += team.totalNumberOfRounds;
-            tableObj[team.id].play++;
-          }
-          if (match.team_1.score > match.team_2.score) {
-            tableObj[match.team_1.id].win++;
-            tableObj[match.team_1.id].totalScore = tableObj[match.team_1.id].win * 3;
-            tableObj[match.team_2.id].lost++;
-
-          } else {
-            tableObj[match.team_2.id].win++;
-            tableObj[match.team_2.id].totalScore = tableObj[match.team_2.id].win * 3;
-            tableObj[match.team_1.id].lost++;
-          }
-          tableObj[match.team_1.id].abnat = (tableObj[match.team_1.id].totalScoreForAbnat / tableObj[match.team_1.id].totalNumberOfRounds).toFixed(1);
-          tableObj[match.team_2.id].abnat = (tableObj[match.team_2.id].totalScoreForAbnat / tableObj[match.team_2.id].totalNumberOfRounds).toFixed(1);
-        }
-
-        let tableArray = [];
-        for (const team_id in tableObj) {
-          tableArray.push(tableObj[team_id]);
-        }
-
-        return {
-          league: {
-            ...league,
-            image: league.image?.formats.thumbnail.url
-          }, table: tableArray.sort(orederTeams)
-        };
-      } catch (err) {
-        console.error(err);
-        ctx.throw(404, "League Not Found")
+      })
+      let studios = []
+      for (const key in studiosObj) {
+        studios.push(studiosObj[key])
       }
-
+      let res = { ...league, studios: studios }
+      return res
     },
-    async findAllStudiosofLeague(ctx) {
-      let leagueId = strapi.requestContext.get().params.id;
-      if (!leagueId || isNaN(leagueId)) {
-        console.log("from in valid ID ");
-        ctx.throw(404, "League Not Found");
-      }
-      let studiosIds = (await strapi.db.connection.raw(`
-            SELECT studio_id as id FROM tournaments_studio_links WHERE tournament_id in
-            (SELECT tournament_id FROM tournaments_league_links WHERE league_id =${leagueId})`))?.rows;
-      if (studiosIds && studiosIds.length > 0) {
-        try {
-          let studios = await Promise.all(
-            studiosIds.map(async (studioId) => {
-              return await strapi.entityService.findOne(
-                "api::studio.studio",
-                studioId.id,
-                {
-                  fields: ["id", "name", "start_at", "url"],
-                  populate: {
-                    tournament: {
-                      fields: ["id", "name"],
-                    },
-                    analysts: {
-                      fields: ["id", "name"],
-                      populate: {
-                        image: {
-                          fields: ["formats"],
-                        },
-                      },
-                    },
-                  },
-                }
-              );
-            })
-          );
-
-          return studios.map((studio) => {
-            return {
-              ...studio,
-              analysts: studio.analysts.map((analyst) => {
-                return {
-                  ...analyst,
-                  image: analyst.image
-                    ? analyst.image.formats.thumbnail.url
-                    : null,
-                };
-              }),
-            };
-          });
-        } catch (err) {
-          ctx.throw(404, "League Not Found");
-        }
-      }
+    async findAllRefereesOfLeague(ctx) {
+      let league = await this.findLeague(ctx)
+      let referees = await strapi.db.connection.raw(`
+        select distinct(r.id) , r.name  ,fr.formats -> 'thumbnail' ->> 'url' as image
+        from leagues l 
+        inner join tournaments_league_links ttl on ttl.league_id = l.id
+        inner join tournaments t on ttl.tournament_id = t.id
+        inner join matches_tournament_links mtl on mtl.tournament_id = t.id
+        inner join matches_referees_links mrl on mrl.match_id = mtl.match_id
+        inner join referees r on r.id = mrl.referee_id
+        inner join files_related_morphs frmr on frmr.related_id = r.id
+        inner join files fr on frmr.file_id = fr.id
+        where l.id = ${league.id} and frmr.related_type = 'api::referee.referee' 
+      `)
+      return { ...league, referees: referees.rows }
     },
-    async findAllRefereesofLeague(ctx) {
-      let leagueId = strapi.requestContext.get().params.id;
-
-      if (!leagueId || isNaN(leagueId)) {
-        console.log("from in valid ID ");
-        ctx.throw(404, "League Not Found");
-      }
-      const refereesIds = (await strapi.db.connection.raw(`
-            SELECT referee_id as id FROM matches_referees_links 
-            WHERE matches_referees_links.match_id in 
-            (SELECT matches_tournament_links.match_id from matches_tournament_links 
-            WHERE matches_tournament_links.tournament_id in
-            (SELECT tournaments_league_links.tournament_id FROM tournaments_league_links 
-            WHERE tournaments_league_links.league_id = ${leagueId}))`))?.rows.map((elm) => elm.id);
-      // console.log(refereesIds);
-      if (refereesIds && refereesIds.length > 0) {
-        try {
-          let referees = await Promise.all(
-            refereesIds.map(async (id) => {
-              return await strapi.entityService.findOne(
-                "api::referee.referee",
-                id,
-                {
-                  fields: ["id", "name"],
-                  populate: {
-                    image: {
-                      fields: ["formats"],
-                    },
-                  },
-                }
-              );
-            })
-          );
-
-          return referees.map((referee) => {
-            return {
-              ...referee,
-              image: referee.image ? referee.image.formats.thumbnail.url : null,
-            };
-          });
-        } catch (err) {
-          console.error(err);
+    async findAllTeamsOfLeague(ctx) {
+      let leaguePlayers = await this.findAllPlayersOfLeague(ctx);
+      let teams = {}
+      leaguePlayers.players.forEach((player) => {
+        if (!Object.hasOwnProperty.call(teams, player.team_id)) {
+          teams[player.team_id] = {
+            name: player.team_name,
+            id: player.team_id,
+            logo: player.team_logo,
+            players: []
+          }
         }
-      }
+        if (player.player_order === 1) {
+          teams[player.team_id].players.unshift({
+            id: player.player_id,
+            name: player.name,
+            image: player.player_img,
+            is_captain: true
+          })
+        } else {
+          teams[player.team_id].players.push({
+            id: player.player_id,
+            name: player.name,
+            image: player.player_img,
+            is_captain: false
+          })
+        }
+
+      })
+      let res = { ...leaguePlayers, teams: teams }
+      delete res.players;
+      return res
     },
     async findAllPlayersOfLeague(ctx) {
-      let leagueId = strapi.requestContext.get().params.id;
+      let league = await this.findLeague(ctx)
+      let players = await strapi.db.connection.raw(
+        `
+          select distinct(p.id) as player_id ,p.name,ptl.player_order , fp.formats -> 'thumbnail' ->> 'url' as player_img ,  
+              t.id as team_id, t.name as team_name, ft.formats -> 'thumbnail' ->> 'url' as team_logo
+          from leagues l 
+          inner join tournaments_league_links ttl on ttl.league_id = l.id
+          inner join tournaments tourn on ttl.tournament_id = tourn.id
+          inner join matches_tournament_links mtl on mtl.tournament_id = tourn.id
+          inner join matches m on  m.id = mtl.match_id
+          inner join matches_team_1_links mt1l on m.id = mt1l.match_id
+          inner join teams t on t.id = mt1l.team_id
+          inner join players_team_links ptl on ptl.team_id = t.id
+          inner join players p on p.id = ptl.player_id
+          inner join files_related_morphs frmt on frmt.related_id = t.id
+          inner join files ft on frmt.file_id = ft.id
+          inner join files_related_morphs frmp on frmp.related_id = p.id
+          inner join files fp on frmp.file_id = fp.id
+          where l.id = ${league.id} and frmt.related_type = 'api::team.team'  and frmp.related_type = 'api::player.player'
 
-      if (!leagueId || isNaN(leagueId)) {
-        console.log("from in valid ID ");
-        ctx.throw(404, "League Not Found");
-      }
-      const team1_ids = (await strapi.db.connection.raw(`
-                select DISTINCT( mt1L.team_id )from matches 
-                Join  matches_team_1_links mt1L on mt1L.match_id = matches.id  
-                where matches.id in 
-                (SELECT match_id FROM matches_tournament_links MTourLink WHERE MTourLink.tournament_id in
-                (SELECT tournament_id from tournaments_league_links tm where tm.league_id = ${leagueId}));
-            `))?.rows;
-      const team2_ids = (await strapi.db.connection.raw(`
-                select DISTINCT( mt2L.team_id )from matches 
-                Join  matches_team_2_links mt2L on mt2L.match_id = matches.id  
-                where matches.id in 
-                (SELECT match_id FROM matches_tournament_links MTourLink WHERE MTourLink.tournament_id in
-                (SELECT tournament_id from tournaments_league_links tm where tm.league_id = ${leagueId}));
-            `))?.rows;
+          union 
 
-      if (
-        team1_ids &&
-        team1_ids.length > 0 &&
-        team2_ids &&
-        team2_ids.length > 0
-      ) {
-        const teams_ids = [...new Set([...(team1_ids.map(elm => elm.team_id)), ...(team2_ids.map(elm => elm.team_id))])];
-        try {
-          let teams = await Promise.all(
-            teams_ids.map(async (elm) => {
-              return await strapi.entityService.findOne(
-                "api::team.team",
-                elm,
-                {
-                  fields: ["id", "name"],
-                  populate: {
-                    players: {
-                      fields: ["id", "name"],
-                      populate: {
-                        image: {
-                          fields: ["formats"],
-                        },
-                      },
-                    },
-                    logo: {
-                      fields: ["formats"],
-                    },
-                  },
-                }
-              );
-            })
-          );
-          return teams.map((team) => {
-            return {
-              ...team,
-              logo: team.logo.formats.thumbnail.url,
-              players: team.players.map((player) => {
-                return {
-                  ...player,
-                  image: player.image
-                    ? player.image.formats.thumbnail.url
-                    : null,
-                };
-              }),
-            };
-          });
-        } catch (err) {
-          console.error(
-            "===========> ERROR IN players In league Controller<==========="
-          );
-          console.error(err);
-        }
-      } else {
-        // Throw Error
-        ctx.throw(404, "League Not Found");
-      }
+          select distinct(p.id) as player_id ,p.name,ptl.player_order , fp.formats -> 'thumbnail' ->> 'url' as player_img ,  
+              t.id as team_id, t.name as team_name, ft.formats -> 'thumbnail' ->> 'url' as team_logo
+          from leagues l 
+          inner join tournaments_league_links ttl on ttl.league_id = l.id
+          inner join tournaments tourn on ttl.tournament_id = tourn.id
+          inner join matches_tournament_links mtl on mtl.tournament_id = tourn.id
+          inner join matches m on  m.id = mtl.match_id
+          inner join matches_team_2_links mt1l on m.id = mt1l.match_id
+          inner join teams t on t.id = mt1l.team_id
+          inner join players_team_links ptl on ptl.team_id = t.id
+          inner join players p on p.id = ptl.player_id
+          inner join files_related_morphs frmt on frmt.related_id = t.id
+          inner join files ft on frmt.file_id = ft.id
+          inner join files_related_morphs frmp on frmp.related_id = p.id
+          inner join files fp on frmp.file_id = fp.id
+          where l.id = ${league.id} and frmt.related_type = 'api::team.team'  and frmp.related_type = 'api::player.player';
+    `)
+      return { ...league, players: players.rows }
     },
     async findAllMatchesOfLeague(ctx) {
+      let league = await this.findLeague(ctx)
+      let data = await strapi.db.connection.raw(`
+          select m.id,t1.name as team_1_name,m.team_1_score, f1.formats -> 'thumbnail' ->> 'url' as team_1_logo,t2.name as team_2_name,m.team_2_score,f2.formats -> 'thumbnail' ->> 'url' as team_2_logo, m.state ,m.url, m.start_at,t.name as tournament_name
+          from leagues l 
+          inner join tournaments_league_links ttl on ttl.league_id = l.id
+          inner join tournaments t on ttl.tournament_id = t.id
+          inner join matches_tournament_links mtl on mtl.tournament_id = t.id
+          inner join matches m on m.id = mtl.match_id
+          inner join matches_team_1_links mt1l on m.id = mt1l.match_id
+          inner join matches_team_2_links mt2l on m.id = mt2l.match_id
+          inner join teams t1 on t1.id = mt1l.team_id
+          inner join teams t2 on t2.id = mt2l.team_id
+          inner join files_related_morphs frm1 on frm1.related_id = t1.id
+          inner join files_related_morphs frm2 on frm2.related_id = t2.id
+          inner join files f1 on frm1.file_id = f1.id
+          inner join files f2 on frm2.file_id = f2.id
+          where l.id = ${league.id} and frm1.related_type = 'api::team.team' and frm2.related_type = 'api::team.team'
+          order by m.start_at;      
+      `)
+      return { ...league, matches: data.rows };
+    },
+    async findLeague(ctx) {
       let leagueId = strapi.requestContext.get().params.id;
       if (!leagueId || isNaN(leagueId)) {
         console.log("from in valid ID ");
         ctx.throw(404, "League Not Found");
       }
 
-      const matchesIds = (await strapi.db.connection.raw(`
-                SELECT match_id  from matches_tournament_links where  tournament_id in 
-                    (SELECT tournament_id from tournaments_league_links WHERE league_id = ${leagueId});`))?.rows;
+      let leagueDate = await strapi.db.connection.raw(`
+        select l.id , l.name , f.formats -> 'thumbnail' ->> 'url' as logo
+        from leagues l
+        inner join files_related_morphs frm on frm.related_id = l.id
+        inner join files f on frm.file_id = f.id
+        where l.id = ${leagueId} and frm.related_type = 'api::league.league';
+        `)
 
-      if (matchesIds && matchesIds.length > 0) {
-        try {
-          let matches = await Promise.all(
-            matchesIds.map(async (elm) => {
-              let match = await strapi.entityService.findOne(
-                "api::match.match",
-                parseInt(elm.match_id),
-                {
-                  fields: [
-                    "id",
-                    "state",
-                    "start_at",
-                    "url",
-                    "team_1_score",
-                    "team_2_score",
-                    "team_1_abnat",
-                    "team_2_abnat",
-                    "numberOfRounds"
-                  ],
-                  populate: {
-                    tournament: {
-                      fields: ["id", "name"],
-                    },
-                    team_1: {
-                      fields: ["id", "name"],
-                      populate: {
-                        logo: {
-                          fields: ["formats"],
-                        },
-                      },
-                    },
-                    team_2: {
-                      fields: ["id", "name"],
-                      populate: {
-                        logo: {
-                          fields: ["formats"],
-                        },
-                      },
-                    },
-                  },
-                }
-              );
-              return match;
-            })
-          );
-
-          return matches.map((match) => {
-            // console.log(match);
-            let newMatch = {
-              ...match,
-              team_1: {
-                id: match.team_1.id,
-                name: match.team_1.name,
-                score: match.team1_score,
-                totalScoreForAbnat: match.team1_abnat,
-                totalNumberOfRounds: match.numberOfRounds,
-                logo: match.team_1.logo?.formats.thumbnail.url,
-              },
-              team_2: {
-                id: match.team_2.id,
-                name: match.team_2.name,
-                score: match.team2_score,
-                totalScoreForAbnat: match.team2_abnat,
-                totalNumberOfRounds: match.numberOfRounds,
-                logo: match.team_2.logo?.formats.thumbnail.url,
-              },
-            };
-
-            delete newMatch.team1_score;
-            delete newMatch.team2_score;
-            return newMatch;
-          });
-        } catch (err) {
-          console.error(
-            "===========> ERROR IN matches In league Controller<==========="
-          );
-          console.error(err);
-        }
-      } else {
-        //throw error League Not Found
+      if (leagueDate.rows.length === 0) {
+        console.log("from in valid ID from sql query");
         ctx.throw(404, "League Not Found");
       }
+      return { ...leagueDate.rows[0] }
     },
   };
 });

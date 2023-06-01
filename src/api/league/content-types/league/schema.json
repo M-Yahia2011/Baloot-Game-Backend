@@ -29,6 +29,12 @@
       "relation": "oneToMany",
       "target": "api::tournament.tournament",
       "mappedBy": "league"
+    },
+    "league_table": {
+      "type": "relation",
+      "relation": "oneToOne",
+      "target": "api::league-table.league-table",
+      "mappedBy": "league"
     }
   }
 }

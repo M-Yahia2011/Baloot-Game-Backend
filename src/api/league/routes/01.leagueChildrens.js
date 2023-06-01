@@ -20,11 +20,10 @@ module.exports = {
         {
             method: "GET",
             path: "/leagues/:id/teams",
-            handler: "league.findAllTeamsofLeague",
+            handler: "league.findAllTeamsOfLeague",
             config: {
                 auth: false,
                 policies: [],
-                middlewares: [],
             },
         }
         , {
@@ -34,28 +33,25 @@ module.exports = {
             config: {
                 auth: false,
                 policies: [],
-                middlewares: [],
             },
         },
         {
             method: "GET",
             path: "/leagues/:id/referees",
-            handler: "league.findAllRefereesofLeague",
+            handler: "league.findAllRefereesOfLeague",
             config: {
                 auth: false,
                 policies: [],
-                middlewares: [],
             },
         },
 
         {
             method: "GET",
             path: "/leagues/:id/studios",
-            handler: "league.findAllStudiosofLeague",
+            handler: "league.findAllStudiosOfLeague",
             config: {
                 auth: false,
                 policies: [],
-                middlewares: [],
             },
         },
 
@@ -66,7 +62,6 @@ module.exports = {
             config: {
                 auth: false,
                 policies: [],
-                middlewares: [],
             },
         },
     ]

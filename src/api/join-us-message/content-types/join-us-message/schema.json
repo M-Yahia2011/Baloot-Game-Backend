@@ -1,0 +1,32 @@
+{
+  "kind": "collectionType",
+  "collectionName": "join_us_messages",
+  "info": {
+    "singularName": "join-us-message",
+    "pluralName": "join-us-messages",
+    "displayName": "رسائل انضم لنا من اوساسيونا",
+    "description": ""
+  },
+  "options": {
+    "draftAndPublish": true
+  },
+  "pluginOptions": {},
+  "attributes": {
+    "name": {
+      "type": "string",
+      "required": true
+    },
+    "email": {
+      "type": "email",
+      "required": true
+    },
+    "message": {
+      "type": "text",
+      "required": true
+    },
+    "date": {
+      "required": true,
+      "type": "datetime"
+    }
+  }
+}
